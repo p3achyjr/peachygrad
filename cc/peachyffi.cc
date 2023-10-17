@@ -35,6 +35,15 @@ PYBIND11_MODULE(peachygrad_cc, m) {
 
         return shape;
       }))
+      .def("__len__", [](const Shape& shape) { return shape.num_dims; })
+      .def("__eq__", &Shape::operator==)
+      .def("__getitem__", [](const Shape& shape, size_t i) { return shape[i]; })
+      .def(
+          "__iter__",
+          [](Shape& shape) {
+            return py::make_iterator(shape.begin(), shape.end());
+          },
+          py::keep_alive<0, 1>())
       .def("__repr__", [](const Shape& shape) {
         std::stringstream ss;
         ss << shape;
@@ -44,6 +53,7 @@ PYBIND11_MODULE(peachygrad_cc, m) {
   py::class_<Tensor>(m, "Tensor")
       .def("dtype", &Tensor::dtype)
       .def("shape", &Tensor::shape)
+      .def("__eq__", &Tensor::operator==)
       .def("__repr__", [](const Tensor& tensor) {
         std::stringstream ss;
         ss << tensor;
@@ -60,19 +70,40 @@ PYBIND11_MODULE(peachygrad_cc, m) {
       "tensor",
       [](py::list py_list, DType dtype) { return tensor(py_list, dtype); },
       "Initialize tensor.");
+
   m.def(
       "add", [](Tensor& x, Tensor& y) { return add(x, y); },
       "Add two tensors.");
   m.def(
+      "add", [](Tensor& dst, Tensor& x, Tensor& y) { return add(dst, x, y); },
+      "Add two tensors into existing buffer.");
+
+  m.def(
       "sub", [](Tensor& x, Tensor& y) { return sub(x, y); },
       "Subtract two tensors.");
+  m.def(
+      "sub", [](Tensor& dst, Tensor& x, Tensor& y) { return sub(dst, x, y); },
+      "Subtract two tensors into existing buffer.");
+
   m.def(
       "mul", [](Tensor& x, Tensor& y) { return mul(x, y); },
       "Multiply two tensors.");
   m.def(
+      "mul", [](Tensor& dst, Tensor& x, Tensor& y) { return mul(dst, x, y); },
+      "Multiply two tensors into existing buffer.");
+
+  m.def(
       "div", [](Tensor& x, Tensor& y) { return div(x, y); },
       "Divide two tensors.");
   m.def(
+      "div", [](Tensor& dst, Tensor& x, Tensor& y) { return div(dst, x, y); },
+      "Divide two tensors into existing buffer.");
+
+  m.def(
       "matmul", [](Tensor& x, Tensor& y) { return mmul(x, y); },
       "Matrix Multiply two tensors.");
+  m.def(
+      "matmul",
+      [](Tensor& dst, Tensor& x, Tensor& y) { return mmul(dst, x, y); },
+      "Matrix Multiply two tensors into existing buffer.");
 }

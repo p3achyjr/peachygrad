@@ -43,6 +43,7 @@ struct Shape {
       return *this;
     }
 
+    bool operator==(const Iterator& other) { return index == other.index; }
     bool operator!=(const Iterator& other) { return index != other.index; }
   };
 
@@ -76,6 +77,8 @@ struct Shape {
 
     return true;
   }
+
+  bool operator!=(const Shape& other) const { return !(*this == other); }
 };
 
 std::ostream& operator<<(std::ostream& os, const Shape& s);
@@ -112,10 +115,12 @@ class Tensor final {
   inline size_t nelems() const { return tensor_buf_->nelems(); }
   inline void* raw() const { return tensor_buf_->raw(); }
   inline DType dtype() const { return dtype_; }
-  inline Shape shape() const { return shape_; }
+  inline const Shape& shape() const { return shape_; }
   inline bool is_vec() const { return shape_.num_dims == 1; }
   inline bool is_matrix() const { return shape_.num_dims == 2; }
   inline bool has_at_least_ndims(size_t n) { return shape_.num_dims <= n; }
+
+  bool operator==(const Tensor& other);
 
  private:
   const DType dtype_;

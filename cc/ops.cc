@@ -73,43 +73,59 @@ Tensor elemwise_add(Tensor& x, Tensor& y) {
   CHECK(x.shape() == y.shape());
   CHECK(x.dtype() == y.dtype());
   Tensor sum = Tensor(x.dtype(), x.shape());
-  Dispatch(OpCode::kAdd, x.dtype(), sum, x, y);
+  return elemwise_add(sum, x, y);
+}
 
-  return sum;
+Tensor elemwise_add(Tensor& dst, Tensor& x, Tensor& y) {
+  Dispatch(OpCode::kAdd, x.dtype(), dst, x, y);
+  return dst;
 }
 
 Tensor elemwise_sub(Tensor& x, Tensor& y) {
   CHECK(x.shape() == y.shape());
   CHECK(x.dtype() == y.dtype());
   Tensor diff = Tensor(x.dtype(), x.shape());
-  Dispatch(OpCode::kSub, x.dtype(), diff, x, y);
+  return elemwise_sub(diff, x, y);
+}
 
-  return diff;
+Tensor elemwise_sub(Tensor& dst, Tensor& x, Tensor& y) {
+  Dispatch(OpCode::kSub, x.dtype(), dst, x, y);
+  return dst;
 }
 
 Tensor elemwise_mul(Tensor& x, Tensor& y) {
   CHECK(x.shape() == y.shape());
   CHECK(x.dtype() == y.dtype());
   Tensor prod = Tensor(x.dtype(), x.shape());
-  Dispatch(OpCode::kMul, x.dtype(), prod, x, y);
+  return elemwise_mul(prod, x, y);
+}
 
-  return prod;
+Tensor elemwise_mul(Tensor& dst, Tensor& x, Tensor& y) {
+  Dispatch(OpCode::kMul, x.dtype(), dst, x, y);
+  return dst;
 }
 
 Tensor elemwise_div(Tensor& x, Tensor& y) {
   CHECK(x.shape() == y.shape());
   CHECK(x.dtype() == y.dtype());
   Tensor quot = Tensor(x.dtype(), x.shape());
-  Dispatch(OpCode::kDiv, x.dtype(), quot, x, y);
+  return elemwise_div(quot, x, y);
+}
 
-  return quot;
+Tensor elemwise_div(Tensor& dst, Tensor& x, Tensor& y) {
+  Dispatch(OpCode::kDiv, x.dtype(), dst, x, y);
+  return dst;
 }
 
 Tensor matmul(Tensor& x, Tensor& y) {
+  Tensor mm = Tensor(x.dtype(), MatmulShape(x, y));
+  return matmul(mm, x, y);
+}
+
+Tensor matmul(Tensor& dst, Tensor& x, Tensor& y) {
   Tensor mm = Tensor(x.dtype(), MatmulShape(x, y));
   Dispatch(OpCode::kMatMul, x.dtype(), mm, x, y);
 
   return mm;
 }
-
 }  // namespace peachygrad

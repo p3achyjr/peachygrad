@@ -61,6 +61,15 @@ struct TensorStringBuilder {
     return ss.str();
   }
 };
+
+template <typename T>
+bool buf_eq(T* buf, T* other_buf, size_t n) {
+  for (int i = 0; i < n; ++i) {
+    if (buf[i] != other_buf[i]) return false;
+  }
+
+  return true;
+}
 }  // namespace
 
 std::ostream& operator<<(std::ostream& os, DType dtype) {
@@ -126,11 +135,24 @@ Tensor::Tensor(DType dtype, const Shape& shape)
       shape_(shape),
       tensor_buf_(std::make_shared<TensorBuf>(dtype_, shape_)) {}
 
+bool Tensor::operator==(const Tensor& other) {
+  if (dtype_ != other.dtype()) return false;
+  if (shape_ != other.shape()) return false;
+
+  size_t num_elems = tensor_buf_->nelems();
+  if (dtype_ == DType::kF32) {
+    return buf_eq<float>(static_cast<float*>(raw()),
+                         static_cast<float*>(other.raw()), num_elems);
+  } else {
+    return buf_eq<int>(static_cast<int*>(raw()), static_cast<int*>(other.raw()),
+                       num_elems);
+  }
+}
+
 std::ostream& operator<<(std::ostream& os, const Tensor& t) {
   TensorStringBuilder builder(t);
-  os << "pg.Tensor(\n";
   os << builder.build();
-  os << ", dtype: " << t.dtype() << ", shape: " << t.shape() << ")\n";
+  os << ", dtype: " << t.dtype() << ", shape: " << t.shape();
   return os;
 }
 
