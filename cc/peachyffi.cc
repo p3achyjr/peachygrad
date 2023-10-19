@@ -35,6 +35,7 @@ PYBIND11_MODULE(peachygrad_cc, m) {
 
         return shape;
       }))
+      .def("transpose", [](const Shape& shape) { return shape.transpose(); })
       .def("__len__", [](const Shape& shape) { return shape.num_dims; })
       .def("__eq__", &Shape::operator==)
       .def("__getitem__", [](const Shape& shape, size_t i) { return shape[i]; })
@@ -70,6 +71,29 @@ PYBIND11_MODULE(peachygrad_cc, m) {
       "tensor",
       [](py::list py_list, DType dtype) { return tensor(py_list, dtype); },
       "Initialize tensor.");
+
+  m.def("identity", [](Tensor& x) { return identity(x); });
+  m.def("identity", [](Tensor& dst, Tensor& x) { return identity(dst, x); });
+
+  m.def("zeros", [](Shape& shape, DType dtype) { return zeros(shape, dtype); });
+  m.def("zeros", [](Shape& shape) { return zeros(shape, DType::kF32); });
+
+  m.def("ones", [](Shape& shape, DType dtype) { return ones(shape, dtype); });
+  m.def("ones", [](Shape& shape) { return ones(shape, DType::kF32); });
+
+  m.def(
+      "transpose", [](Tensor& x) { return transpose(x); },
+      "Transpose a tensor. Only supports reversing indices at the moment.");
+  m.def(
+      "transpose", [](Tensor& dst, Tensor& x) { return transpose(dst, x); },
+      "Transpose a tensor and store in `dst`. Only supports reversing indices "
+      "at the moment.");
+
+  m.def(
+      "neg", [](Tensor& x) { return neg(x); }, "Negate a tensor.");
+  m.def(
+      "neg", [](Tensor& dst, Tensor& x) { return neg(dst, x); },
+      "Neg a tensor and store in `dst`.");
 
   m.def(
       "add", [](Tensor& x, Tensor& y) { return add(x, y); },

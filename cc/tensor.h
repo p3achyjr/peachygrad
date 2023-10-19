@@ -61,6 +61,15 @@ struct Shape {
   Iterator begin() const { return Iterator(0, *this); }
   Iterator end() const { return Iterator(num_dims, *this); }
 
+  Shape transpose() const {
+    Shape shape_t(num_dims);
+    for (int i = 0; i < num_dims; ++i) {
+      shape_t[num_dims - i - 1] = shape[i];
+    }
+
+    return shape_t;
+  }
+
   static Shape Zero(size_t num_dims) {
     Shape zero_index(num_dims);
     std::fill(zero_index.shape.begin(), zero_index.shape.end(), 0);

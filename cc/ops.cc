@@ -8,6 +8,7 @@
 namespace peachygrad {
 namespace {
 
+static const std::array<UnopKernel, kNumDTypes> kNegKernels = {fneg, ineg};
 static const std::array<BinopKernel, kNumDTypes> kAddKernels = {fadd, iadd};
 static const std::array<BinopKernel, kNumDTypes> kSubKernels = {fsub, isub};
 static const std::array<BinopKernel, kNumDTypes> kMulKernels = {fmul, imul};
@@ -48,6 +49,14 @@ Shape MatmulShape(Tensor& x, Tensor& y) {
   return Shape({x.shape()[0], y.shape()[1]});
 }
 
+void DispatchUnop(UnopCode op, DType dtype, Tensor& dst, Tensor& x) {
+  switch (op) {
+    case UnopCode::kNeg:
+      return kNegKernels[DTypeIndex(dtype)](dst.raw(), x.raw(),
+                                            dst.buf().nelems());
+  }
+}
+
 void Dispatch(OpCode op, DType dtype, Tensor& dst, Tensor& x, Tensor& y) {
   switch (op) {
     case OpCode::kAdd:
@@ -68,6 +77,16 @@ void Dispatch(OpCode op, DType dtype, Tensor& dst, Tensor& x, Tensor& y) {
 }
 
 }  // namespace
+
+Tensor elemwise_neg(Tensor& x) {
+  Tensor neg = Tensor(x.dtype(), x.shape());
+  return elemwise_neg(neg, x);
+}
+
+Tensor elemwise_neg(Tensor& dst, Tensor& x) {
+  DispatchUnop(UnopCode::kNeg, x.dtype(), dst, x);
+  return dst;
+}
 
 Tensor elemwise_add(Tensor& x, Tensor& y) {
   CHECK(x.shape() == y.shape());

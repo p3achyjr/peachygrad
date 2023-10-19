@@ -15,12 +15,12 @@ namespace {
     _mm256_store_ps((dst) + i, vec_dst);                  \
   }
 
-#define IVEC_KERNEL(dst, x, y, mm_size, vec_ub, vec_inst) \
-  for (size_t i = 0; i < (vec_ub); i += mm_size) {        \
-    __m256i x_vec = _mm256_load_si256((__m256i*)(x) + i); \
-    __m256i y_vec = _mm256_load_si256((__m256i*)(y) + i); \
-    __m256i vec_dst = (vec_inst)(x_vec, y_vec);           \
-    _mm256_store_si256((__m256i*)((dst) + i), vec_dst);   \
+#define IVEC_KERNEL(dst, x, y, mm_size, vec_ub, vec_inst)   \
+  for (size_t i = 0; i < (vec_ub); i += mm_size) {          \
+    __m256i x_vec = _mm256_load_si256((__m256i*)((x) + i)); \
+    __m256i y_vec = _mm256_load_si256((__m256i*)((y) + i)); \
+    __m256i vec_dst = (vec_inst)(x_vec, y_vec);             \
+    _mm256_store_si256((__m256i*)((dst) + i), vec_dst);     \
   }
 
 #define TILE_LEN 64
@@ -69,6 +69,43 @@ void imatmul_kernel(void* dst, void* m0, void* m1, const size_t dst_size,
 
 #undef TILE_LEN
 }  // namespace
+
+// ---- Neg ---- //
+void fneg(void* dst, void* x, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  float* fx = static_cast<float*>(x);
+
+  size_t mm_size = sizeof(__m256) / sizeof(float);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < (vec_ub); i += mm_size) {
+    __m256 x_vec = _mm256_load_ps(fx + i);
+    __m256 vec_dst = _mm256_sub_ps(_mm256_setzero_ps(), x_vec);
+    _mm256_store_ps(fdst + i, vec_dst);
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = -fx[i];
+  }
+}
+
+void ineg(void* dst, void* x, size_t n) {
+  int* idst = static_cast<int*>(dst);
+  int* ix = static_cast<int*>(x);
+
+  size_t mm_size = sizeof(__m256) / sizeof(int);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < (vec_ub); i += mm_size) {
+    __m256i x_vec = _mm256_load_si256((__m256i*)(ix + i));
+    __m256i vec_dst = _mm256_sub_epi32(_mm256_setzero_si256(), x_vec);
+    _mm256_store_si256((__m256i*)(idst + i), vec_dst);
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    idst[i] = -ix[i];
+  }
+}
 
 // ---- Add ---- //
 void fadd(void* dst, void* x, void* y, size_t n) {
