@@ -6,6 +6,12 @@ namespace peachygrad {
 void fneg(void* dst, void* x, size_t n);
 void ineg(void* dst, void* x, size_t n);
 
+void fexp(void* dst, void* x, size_t n);
+void iexp(void* dst, void* x, size_t n);
+
+void flog(void* dst, void* x, size_t n);
+void ilog(void* dst, void* x, size_t n);
+
 void fadd(void* dst, void* x, void* y, size_t n);
 void iadd(void* dst, void* x, void* y, size_t n);
 

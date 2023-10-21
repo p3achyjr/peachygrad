@@ -72,15 +72,19 @@ PYBIND11_MODULE(peachygrad_cc, m) {
       [](py::list py_list, DType dtype) { return tensor(py_list, dtype); },
       "Initialize tensor.");
 
-  m.def("identity", [](Tensor& x) { return identity(x); });
-  m.def("identity", [](Tensor& dst, Tensor& x) { return identity(dst, x); });
-
+  // Zeros
   m.def("zeros", [](Shape& shape, DType dtype) { return zeros(shape, dtype); });
   m.def("zeros", [](Shape& shape) { return zeros(shape, DType::kF32); });
 
+  // Ones
   m.def("ones", [](Shape& shape, DType dtype) { return ones(shape, dtype); });
   m.def("ones", [](Shape& shape) { return ones(shape, DType::kF32); });
 
+  // Identity
+  m.def("identity", [](Tensor& x) { return identity(x); });
+  m.def("identity", [](Tensor& dst, Tensor& x) { return identity(dst, x); });
+
+  // Transpose
   m.def(
       "transpose", [](Tensor& x) { return transpose(x); },
       "Transpose a tensor. Only supports reversing indices at the moment.");
@@ -89,12 +93,28 @@ PYBIND11_MODULE(peachygrad_cc, m) {
       "Transpose a tensor and store in `dst`. Only supports reversing indices "
       "at the moment.");
 
+  // Neg
   m.def(
       "neg", [](Tensor& x) { return neg(x); }, "Negate a tensor.");
   m.def(
       "neg", [](Tensor& dst, Tensor& x) { return neg(dst, x); },
       "Neg a tensor and store in `dst`.");
 
+  // Exp
+  m.def(
+      "exp", [](Tensor& x) { return exp(x); }, "Compute e^x");
+  m.def(
+      "exp", [](Tensor& dst, Tensor& x) { return exp(x); },
+      "Compute e^x. Store into existing buffer.");
+
+  // Exp
+  m.def(
+      "log", [](Tensor& x) { return log(x); }, "Compute ln(x)");
+  m.def(
+      "log", [](Tensor& dst, Tensor& x) { return log(x); },
+      "Compute ln(x). Store into existing buffer.");
+
+  // Add
   m.def(
       "add", [](Tensor& x, Tensor& y) { return add(x, y); },
       "Add two tensors.");
@@ -102,6 +122,7 @@ PYBIND11_MODULE(peachygrad_cc, m) {
       "add", [](Tensor& dst, Tensor& x, Tensor& y) { return add(dst, x, y); },
       "Add two tensors into existing buffer.");
 
+  // Sub
   m.def(
       "sub", [](Tensor& x, Tensor& y) { return sub(x, y); },
       "Subtract two tensors.");
@@ -109,6 +130,7 @@ PYBIND11_MODULE(peachygrad_cc, m) {
       "sub", [](Tensor& dst, Tensor& x, Tensor& y) { return sub(dst, x, y); },
       "Subtract two tensors into existing buffer.");
 
+  // Mul
   m.def(
       "mul", [](Tensor& x, Tensor& y) { return mul(x, y); },
       "Multiply two tensors.");
@@ -116,6 +138,7 @@ PYBIND11_MODULE(peachygrad_cc, m) {
       "mul", [](Tensor& dst, Tensor& x, Tensor& y) { return mul(dst, x, y); },
       "Multiply two tensors into existing buffer.");
 
+  // Div
   m.def(
       "div", [](Tensor& x, Tensor& y) { return div(x, y); },
       "Divide two tensors.");
@@ -123,6 +146,7 @@ PYBIND11_MODULE(peachygrad_cc, m) {
       "div", [](Tensor& dst, Tensor& x, Tensor& y) { return div(dst, x, y); },
       "Divide two tensors into existing buffer.");
 
+  // Matmul
   m.def(
       "matmul", [](Tensor& x, Tensor& y) { return mmul(x, y); },
       "Matrix Multiply two tensors.");

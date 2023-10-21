@@ -7,7 +7,7 @@ add_subdirectory(extern/pybind11)
 
 set(CMAKE_CXX_COMPILER "/usr/bin/g++")
 set(CMAKE_CXX_STANDARD 17)
-add_compile_options(-mavx2)
+add_compile_options(-mavx2 -mfma)
 
 # Add Sources.
 file(GLOB SOURCES "cc/*.cc" "cc/*.h")

@@ -67,6 +67,14 @@ inline Tensor transpose(Tensor& x) {
 inline Tensor neg(Tensor& x) { return elemwise_neg(x); }
 inline Tensor neg(Tensor& dst, Tensor& x) { return elemwise_neg(dst, x); }
 
+// Exp.
+inline Tensor exp(Tensor& x) { return elemwise_exp(x); }
+inline Tensor exp(Tensor& dst, Tensor& x) { return elemwise_exp(x); }
+
+// Log.
+inline Tensor log(Tensor& x) { return elemwise_log(x); }
+inline Tensor log(Tensor& dst, Tensor& x) { return elemwise_log(x); }
+
 // Add.
 inline Tensor add(Tensor& x, Tensor& y) { return elemwise_add(x, y); }
 inline Tensor add(Tensor& dst, Tensor& x, Tensor& y) {

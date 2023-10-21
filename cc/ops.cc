@@ -9,6 +9,8 @@ namespace peachygrad {
 namespace {
 
 static const std::array<UnopKernel, kNumDTypes> kNegKernels = {fneg, ineg};
+static const std::array<UnopKernel, kNumDTypes> kExpKernels = {fexp, iexp};
+static const std::array<UnopKernel, kNumDTypes> kLogKernels = {flog, ilog};
 static const std::array<BinopKernel, kNumDTypes> kAddKernels = {fadd, iadd};
 static const std::array<BinopKernel, kNumDTypes> kSubKernels = {fsub, isub};
 static const std::array<BinopKernel, kNumDTypes> kMulKernels = {fmul, imul};
@@ -54,6 +56,12 @@ void DispatchUnop(UnopCode op, DType dtype, Tensor& dst, Tensor& x) {
     case UnopCode::kNeg:
       return kNegKernels[DTypeIndex(dtype)](dst.raw(), x.raw(),
                                             dst.buf().nelems());
+    case UnopCode::kExp:
+      return kExpKernels[DTypeIndex(dtype)](dst.raw(), x.raw(),
+                                            dst.buf().nelems());
+    case UnopCode::kLog:
+      return kLogKernels[DTypeIndex(dtype)](dst.raw(), x.raw(),
+                                            dst.buf().nelems());
   }
 }
 
@@ -85,6 +93,26 @@ Tensor elemwise_neg(Tensor& x) {
 
 Tensor elemwise_neg(Tensor& dst, Tensor& x) {
   DispatchUnop(UnopCode::kNeg, x.dtype(), dst, x);
+  return dst;
+}
+
+Tensor elemwise_exp(Tensor& x) {
+  Tensor exp = Tensor(DType::kF32, x.shape());
+  return elemwise_exp(exp, x);
+}
+
+Tensor elemwise_exp(Tensor& dst, Tensor& x) {
+  DispatchUnop(UnopCode::kExp, x.dtype(), dst, x);
+  return dst;
+}
+
+Tensor elemwise_log(Tensor& x) {
+  Tensor exp = Tensor(DType::kF32, x.shape());
+  return elemwise_log(exp, x);
+}
+
+Tensor elemwise_log(Tensor& dst, Tensor& x) {
+  DispatchUnop(UnopCode::kLog, x.dtype(), dst, x);
   return dst;
 }
 

@@ -14,10 +14,18 @@ enum class OpCode : uint8_t {
 
 enum class UnopCode : uint8_t {
   kNeg = 0,
+  kExp = 1,
+  kLog = 2,
 };
 
 Tensor elemwise_neg(Tensor& x);
 Tensor elemwise_neg(Tensor& dst, Tensor& x);
+
+Tensor elemwise_exp(Tensor& x);
+Tensor elemwise_exp(Tensor& dst, Tensor& x);
+
+Tensor elemwise_log(Tensor& x);
+Tensor elemwise_log(Tensor& dst, Tensor& x);
 
 Tensor elemwise_add(Tensor& x, Tensor& y);
 Tensor elemwise_add(Tensor& dst, Tensor& x, Tensor& y);

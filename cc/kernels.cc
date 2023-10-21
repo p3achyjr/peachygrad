@@ -68,6 +68,130 @@ void imatmul_kernel(void* dst, void* m0, void* m1, const size_t dst_size,
 }
 
 #undef TILE_LEN
+
+inline __m256 vec_exp(__m256 x_vec) {
+  // Shamelessly ripped from https://stackoverflow.com/a/50425370.
+  // Black magic. The first answer kind of makes sense, but I am still working
+  // through what the mantissa/float representation manipulation means.
+  static constexpr int kC0 = 3537;
+  static constexpr int kC1 = 13668;
+  static constexpr int kC2 = 15817;
+  static constexpr int kC3 = -80470;
+  static constexpr float kMagic = 12102203.0f;  // 1 << 23 / ln(2)
+
+  __m256i c0 = _mm256_set1_epi32(kC0);
+  __m256i c1 = _mm256_set1_epi32(kC1);
+  __m256i c2 = _mm256_set1_epi32(kC2);
+  __m256i c3 = _mm256_set1_epi32(kC3);
+  __m256 magic = _mm256_set1_ps(kMagic);
+
+  __m256i x_vec_int;
+  x_vec = _mm256_mul_ps(magic, x_vec);
+  x_vec_int = _mm256_cvtps_epi32(x_vec);
+  x_vec_int = _mm256_add_epi32(x_vec_int, _mm256_set1_epi32(127 * (1 << 23)));
+
+  __m256i mantissas;
+  mantissas = _mm256_sra_epi32(x_vec_int, _mm_cvtsi32_si128(7));
+  mantissas = _mm256_and_si256(mantissas, _mm256_set1_epi32(0xffff));
+
+  // quartic spline interpolation. how do you find these values?
+  __m256i p = _mm256_mullo_epi32(c0, mantissas);   // c0 * m
+  p = _mm256_sra_epi32(p, _mm_cvtsi32_si128(16));  // (c0 * m) >> 16
+  p = _mm256_add_epi32(p, c1);                     // (m(c0) >> 16) + c1
+  p = _mm256_mullo_epi32(p, mantissas);            // m((m(c0) >> 16) + c1)
+  p = _mm256_sra_epi32(p,
+                       _mm_cvtsi32_si128(18));  // m((m(c0) >> 16) + c1) >> 18
+  p = _mm256_add_epi32(p, c2);  // (m((m(c0) >> 16) + c1) >> 18) + c2
+  p = _mm256_mullo_epi32(p,
+                         mantissas);  // m((m((m(c0) >> 16) + c1) >> 18) + c2)
+  p = _mm256_sra_epi32(
+      p,
+      _mm_cvtsi32_si128(14));  // m((m((m(c0) >> 16) + c1) >> 18) + c2) >> 14
+  p = _mm256_add_epi32(p,
+                       c3);  // m((m((m(c0) >> 16) + c1) >> 18) + c2) >> 14 + c3
+  p = _mm256_mullo_epi32(p, mantissas);
+  p = _mm256_sra_epi32(p, _mm_cvtsi32_si128(11));
+  x_vec_int = _mm256_add_epi32(x_vec_int, p);
+
+  return _mm256_castsi256_ps(x_vec_int);
+}
+
+inline float scalar_exp(float x) {
+  union Bits {
+    float f;
+    int i;
+  };
+
+  static constexpr int kC0 = 3537;
+  static constexpr int kC1 = 13668;
+  static constexpr int kC2 = 15817;
+  static constexpr int kC3 = -80470;
+  static constexpr float kMagic = 12102203.0f;  // 1 << 23 / ln(2)
+
+  Bits b;
+  b.i = (int32_t)(kMagic * x) + 127 * (1 << 23);
+  int32_t m = (b.i >> 7) & 0xffff;  // copy mantissa
+  int32_t p = ((kC0 * m) >> 16) + kC1;
+  p = ((m * p) >> 18) + kC2;
+  p = ((m * p) >> 14) + kC3;
+  p = (m * p) >> 11;
+
+  b.i += p;
+  return b.f;
+}
+
+inline __m256 vec_log(__m256 x_vec) {
+  // https://stackoverflow.com/a/39822314
+  static constexpr int kMagic = 0x3f2aaaab;
+  static constexpr float k1pNeg23 = 1.19209290e-7f;
+  static constexpr float kMC0 = 0.230836749f;
+  static constexpr float kAC0 = -0.279208571f;
+  static constexpr float kMC1 = 0.331826031f;
+  static constexpr float kAC1 = -0.498910338f;
+  static constexpr float kLog2 = 0.693147182f;
+
+  __m256i x_vec_int = _mm256_castps_si256(x_vec);
+  __m256i e = _mm256_sub_epi32(x_vec_int, _mm256_set1_epi32(kMagic));
+  e = _mm256_and_si256(e, _mm256_set1_epi32(0xff800000));
+  __m256 m = _mm256_castsi256_ps(_mm256_sub_epi32(x_vec_int, e));
+  __m256 i = _mm256_mul_ps(_mm256_cvtepi32_ps(e), _mm256_set1_ps(k1pNeg23));
+  __m256 f = _mm256_sub_ps(m, _mm256_set1_ps(1.0f));
+  __m256 s = _mm256_mul_ps(f, f);
+  __m256 r = _mm256_fmadd_ps(_mm256_set1_ps(kMC0), f, _mm256_set1_ps(kAC0));
+  __m256 t = _mm256_fmadd_ps(_mm256_set1_ps(kMC1), f, _mm256_set1_ps(kAC1));
+  r = _mm256_fmadd_ps(r, s, t);
+  r = _mm256_fmadd_ps(r, s, f);
+  r = _mm256_fmadd_ps(i, _mm256_set1_ps(kLog2), r);
+  return r;
+}
+
+inline float scalar_log(float x) {
+  // https://stackoverflow.com/a/39822314
+  union Bits {
+    int i;
+    float f;
+  };
+  float r, s, t, i, f;
+  Bits m;
+  Bits e;
+  Bits x_bits;
+  x_bits.f = x;
+  e.f = x;
+
+  e.i = (e.i - 0x3f2aaaab) & 0xff800000;
+  m.i = x_bits.i - e.i;
+  i = (float)(e.i) * 1.19209290e-7f;  // 0x1.0p-23
+  /* m in [2/3, 4/3] */
+  f = m.f - 1.0f;
+  s = f * f;
+  /* Compute log1p(f) for f in [-1/3, 1/3] */
+  r = fmaf(0.230836749f, f, -0.279208571f);  // 0x1.d8c0f0p-3, -0x1.1de8dap-2
+  t = fmaf(0.331826031f, f, -0.498910338f);  // 0x1.53ca34p-2, -0x1.fee25ap-2
+  r = fmaf(r, s, t);
+  r = fmaf(r, s, f);
+  r = fmaf(i, 0.693147182f, r);  // 0x1.62e430p-1 // log(2)
+  return r;
+}
 }  // namespace
 
 // ---- Neg ---- //
@@ -104,6 +228,76 @@ void ineg(void* dst, void* x, size_t n) {
   // finish stragglers.
   for (size_t i = vec_ub; i < n; ++i) {
     idst[i] = -ix[i];
+  }
+}
+
+// ---- Exp ---- //
+void fexp(void* dst, void* x, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  float* fx = static_cast<float*>(x);
+
+  size_t mm_size = sizeof(__m256) / sizeof(float);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < (vec_ub); i += mm_size) {
+    _mm256_store_ps(fdst + i, vec_exp(_mm256_load_ps(fx + i)));
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = scalar_exp(fx[i]);
+  }
+}
+
+void iexp(void* dst, void* x, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  int* ix = static_cast<int*>(x);
+
+  size_t mm_size = sizeof(__m256) / sizeof(int);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < (vec_ub); i += mm_size) {
+    _mm256_store_ps(
+        fdst + i,
+        vec_exp(_mm256_cvtepi32_ps(_mm256_load_si256((__m256i*)(ix + i)))));
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = scalar_exp((float)(ix[i]));
+  }
+}
+
+// ---- Log ---- //
+void flog(void* dst, void* x, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  float* fx = static_cast<float*>(x);
+
+  size_t mm_size = sizeof(__m256) / sizeof(float);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < (vec_ub); i += mm_size) {
+    _mm256_store_ps(fdst + i, vec_log(_mm256_load_ps(fx + i)));
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = scalar_log(fx[i]);
+  }
+}
+
+void ilog(void* dst, void* x, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  int* ix = static_cast<int*>(x);
+
+  size_t mm_size = sizeof(__m256) / sizeof(int);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < (vec_ub); i += mm_size) {
+    _mm256_store_ps(
+        fdst + i,
+        vec_log(_mm256_cvtepi32_ps(_mm256_load_si256((__m256i*)(ix + i)))));
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = scalar_log((float)(ix[i]));
   }
 }
 
@@ -192,7 +386,7 @@ void imul(void* dst, void* x, void* y, size_t n) {
 
   size_t mm_size = sizeof(__m256i) / sizeof(float);
   size_t vec_ub = (n / mm_size) * mm_size;
-  IVEC_KERNEL(idst, ix, iy, mm_size, vec_ub, _mm256_mul_epi32);
+  IVEC_KERNEL(idst, ix, iy, mm_size, vec_ub, _mm256_mullo_epi32);
 
   // compute scalar section.
   for (size_t i = vec_ub; i < n; ++i) {
