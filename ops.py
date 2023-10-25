@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 import peachygrad_cc as pg_cc
 
@@ -10,7 +10,7 @@ def arity_check(arity: int, expected_arity: int, op: str):
         raise Exception(f"{op}, Expected `{expected_arity}` args, got `{arity}.")
 
 
-class Node:
+class Node(object):
     name: str
     out_tensor: Optional[pg_cc.Tensor]
     evaluated: bool
@@ -97,10 +97,10 @@ def elemwise_check(op_name: str, lhs: Node, rhs: Node):
 def unop_init(op: Node, in_node: Node):
     op.in_node = in_node
     op.dtype = in_node.dtype
-    op.unop = True
+    op.is_unop = True
 
 
-def unop_eval(op: Node, kernel):
+def unop_eval(op: Node, kernel, *args):
     if op.evaluated:
         return
 
@@ -108,9 +108,9 @@ def unop_eval(op: Node, kernel):
         op.in_node.eval()
 
     if op.out_tensor is None:
-        op.out_tensor = kernel(op.in_node.out_tensor)
+        op.out_tensor = kernel(op.in_node.out_tensor, *args)
     else:
-        kernel(op.out_tensor, op.in_node.out_tensor)
+        kernel(op.out_tensor, op.in_node.out_tensor, *args)
 
     op.evaluated = True
     return op
@@ -149,6 +149,9 @@ class Identity(Node):
     def reset(self):
         unop_reset(self)
 
+    def __repr__(self):
+        return unop_str(self)
+
 
 class Transpose(Node):
     """Represents Transpose"""
@@ -168,6 +171,94 @@ class Transpose(Node):
 
     def reset(self):
         unop_reset(self)
+
+    def __repr__(self):
+        return unop_str(self)
+
+
+class Reduce(Node):
+    """Reduce sum over a single axis. Multiple axes can be represented as
+    multiple of these operations."""
+
+    in_node: Node
+
+    SUM = "sum"
+    MEAN = "mean"
+
+    def __init__(self, x: Node, axis: int, mode=SUM):
+        if 0 > axis >= len(x.shape):
+            raise Exception(
+                f"`Reduce{mode.capitalize()}` axis out of bounds: {axis}."
+                + f"Num axes: {len(x.shape)}"
+            )
+        super().__init__(f"Reduce{mode.capitalize()}")
+        unop_init(self, x)
+        new_shape = list(x.shape)
+        new_shape[axis] = 1
+        self.axis = axis
+        self.size = x.shape[self.axis]
+        self.shape = pg_cc.shape(tuple(new_shape))
+        self.mode = mode
+
+        if mode == self.SUM:
+            self.cc_fn = pg_cc.reduce_sum
+        elif mode == self.MEAN:
+            self.cc_fn = pg_cc.reduce_mean
+        else:
+            raise Exception(f"None or Invalid `Reduce` Mode. {mode}")
+
+    def eval(self):
+        unop_eval(self, self.cc_fn, self.axis)
+        return self
+
+    def grad(self, out_grad: Node):
+        if self.mode == self.SUM:
+            return (Broadcast(out_grad, self.axis, self.size),)
+        elif self.mode == self.MEAN:
+            return (
+                Broadcast(out_grad, self.axis, self.size)
+                * constant(self.in_node.shape, 1.0 / self.size),
+            )
+
+    def reset(self):
+        unop_reset(self)
+
+    def __repr__(self):
+        return unop_str(self)
+
+
+class Broadcast(Node):
+    """Broadcast along a single axis. Axis must have size 1."""
+
+    in_node: Node
+
+    def __init__(self, x: Node, axis: int, size: int):
+        if 0 > axis >= len(x.shape):
+            raise Exception(
+                f"`Broadcast` axis out of bounds: {axis}. Num axes: {len(x.shape)}"
+            )
+        if x.shape[axis] != 1:
+            raise Exception(f"`Broadcast` must expand an axis with length 1.")
+        super().__init__("Broadcast")
+        unop_init(self, x)
+        new_shape = list(x.shape)
+        new_shape[axis] = size
+        self.axis = axis
+        self.size = size
+        self.shape = pg_cc.shape(tuple(new_shape))
+
+    def eval(self):
+        unop_eval(self, pg_cc.broadcast, self.axis, self.size)
+        return self
+
+    def grad(self, out_grad: Node):
+        return (Reduce(out_grad, axis=self.axis, mode=Reduce.SUM),)
+
+    def reset(self):
+        unop_reset(self)
+
+    def __repr__(self):
+        return unop_str(self)
 
 
 class Neg(Node):
@@ -189,6 +280,127 @@ class Neg(Node):
     def reset(self):
         unop_reset(self)
 
+    def __repr__(self):
+        return unop_str(self)
+
+
+class Exp(Node):
+    """Represents e^x"""
+
+    in_node: Node
+
+    def __init__(self, x: Node):
+        super().__init__("Exp")
+        unop_init(self, x)
+        self.shape = x.shape
+
+    def eval(self):
+        unop_eval(self, pg_cc.exp)
+        return self
+
+    def grad(self, out_grad: Node):
+        return (out_grad * self,)
+
+    def reset(self):
+        unop_reset(self)
+
+    def __repr__(self):
+        return unop_str(self)
+
+
+class Log(Node):
+    """Represents ln(x)"""
+
+    in_node: Node
+
+    def __init__(self, x: Node):
+        super().__init__("Log")
+        unop_init(self, x)
+        self.shape = x.shape
+
+    def eval(self):
+        unop_eval(self, pg_cc.log)
+        return self
+
+    def grad(self, out_grad: Node):
+        return (out_grad * Rcp(self.in_node),)
+
+    def reset(self):
+        unop_reset(self)
+
+    def __repr__(self):
+        return unop_str(self)
+
+
+class Rcp(Node):
+    """Represents 1 / x"""
+
+    in_node: Node
+
+    def __init__(self, x: Node):
+        super().__init__("Rcp")
+        unop_init(self, x)
+        self.shape = x.shape
+
+    def eval(self):
+        return unop_eval(self, pg_cc.rcp)
+
+    def grad(self, out_grad: Node):
+        return (out_grad * -self * self,)
+
+    def reset(self):
+        unop_reset(self)
+
+    def __repr__(self):
+        return unop_str(self)
+
+
+class MaskGt(Node):
+    """Creates mask where x = 1.0 if x > c, 0.0 ow."""
+
+    in_node: Node
+
+    def __init__(self, x: Node, c: float):
+        super().__init__("MaskGt")
+        unop_init(self, x)
+        self.c = c
+        self.shape = x.shape
+
+    def eval(self):
+        return unop_eval(self, pg_cc.mask_gt, self.c)
+
+    def grad(self, _: Node):
+        raise NotImplementedError("`grad` not yet implemented for `MaskGt`.")
+
+    def reset(self):
+        unop_reset(self)
+
+    def __repr__(self):
+        return unop_str(self)
+
+
+class Relu(Node):
+    """Represents ReLU(x)"""
+
+    in_node: Node
+
+    def __init__(self, x: Node):
+        super().__init__("Relu")
+        unop_init(self, x)
+        self.shape = x.shape
+
+    def eval(self):
+        return unop_eval(self, pg_cc.max, 0)
+
+    def grad(self, out_grad: Node):
+        return (MaskGt(self.in_node, 0) * out_grad,)
+
+    def reset(self):
+        unop_reset(self)
+
+    def __repr__(self):
+        return unop_str(self)
+
 
 #### Binary Operations ####
 def binop_init(op: Node, lhs: Node, rhs: Node):
@@ -203,14 +415,13 @@ def binop_eval(op: Node, kernel):
 
     if not op.lhs.evaluated:
         op.lhs.eval()
-    if not op.rhs.out_tensor:
+    if not op.rhs.evaluated:
         op.rhs.eval()
 
     if op.out_tensor is None:
         op.out_tensor = kernel(op.lhs.out_tensor, op.rhs.out_tensor)
     else:
         kernel(op.out_tensor, op.lhs.out_tensor, op.rhs.out_tensor)
-
     op.evaluated = True
     return op
 
@@ -300,7 +511,8 @@ class Mul(Node):
         self.dtype = lhs.dtype
 
     def eval(self):
-        return binop_eval(self, pg_cc.mul)
+        binop_eval(self, pg_cc.mul)
+        return self
 
     def grad(self, out_grad: Node):
         return out_grad * self.rhs, out_grad * self.lhs
@@ -327,10 +539,15 @@ class Div(Node):
         self.dtype = lhs.dtype
 
     def eval(self):
-        return binop_eval(self, pg_cc.div)
+        binop_eval(self, pg_cc.div)
+        return self
 
     def grad(self, out_grad: Node):
-        raise NotImplementedError("Div Grad not yet implemented.")
+        # precompute notes to avoid recomputation.
+        rcp_rhs = Rcp(self.rhs)
+
+        # 1 / y, x * -(1 / y ^ 2)
+        return (out_grad * rcp_rhs, out_grad * self.lhs * rcp_rhs * -rcp_rhs)
 
     def reset(self):
         binop_reset(self)
@@ -387,14 +604,34 @@ def tensor(x: list):
     return Value(pg_cc.tensor(x))
 
 
-def zeros(shape: tuple, dtype=pg_cc.f32):
-    shape = pg_cc.shape(shape)
-    return pg_cc.zeros(shape, dtype)
+def placeholder(shape: Union[tuple, pg_cc.shape], dtype=pg_cc.f32):
+    if isinstance(shape, tuple):
+        shape = pg_cc.shape(shape)
+    return Value(pg_cc.zeros(shape, dtype))
 
 
-def ones(shape: tuple, dtype=pg_cc.f32):
-    shape = pg_cc.shape(shape)
-    return pg_cc.ones(shape, dtype)
+def zeros(shape: Union[tuple, pg_cc.shape], dtype=pg_cc.f32):
+    if isinstance(shape, tuple):
+        shape = pg_cc.shape(shape)
+    return Value(pg_cc.zeros(shape, dtype))
+
+
+def ones(shape: Union[tuple, pg_cc.shape], dtype=pg_cc.f32):
+    if isinstance(shape, tuple):
+        shape = pg_cc.shape(shape)
+    return Value(pg_cc.ones(shape, dtype))
+
+
+def constant(shape: Union[tuple, pg_cc.shape], c: float, dtype=pg_cc.f32):
+    if isinstance(shape, tuple):
+        shape = pg_cc.shape(shape)
+    return Value(pg_cc.constant(shape, dtype, c))
+
+
+def uniform(shape: Union[tuple, pg_cc.shape], lo=-1.0, hi=1.0):
+    if isinstance(shape, tuple):
+        shape = pg_cc.shape(shape)
+    return Value(pg_cc.uniform(shape, lo, hi))
 
 
 # Data Transform
@@ -402,9 +639,37 @@ def transpose(x: Node):
     return Transpose(x)
 
 
+def reduce_sum(x: Node, axis: int):
+    return Reduce(x, axis, mode=Reduce.SUM)
+
+
+def reduce_mean(x: Node, axis: int):
+    return Reduce(x, axis, mode=Reduce.MEAN)
+
+
+def broadcast(x: Node, axis: int, size: int):
+    return Broadcast(x, axis, size)
+
+
 # Arithmetic
 def neg(x: Node):
     return Neg(x)
+
+
+def exp(x: Node):
+    return Exp(x)
+
+
+def log(x: Node):
+    return Log(x)
+
+
+def rcp(x: Node):
+    return Rcp(x)
+
+
+def relu(x: Node):
+    return Relu(x)
 
 
 def add(x: Node, y: Node):
@@ -425,3 +690,13 @@ def div(x: Node, y: Node):
 
 def matmul(x: Node, y: Node):
     return Matmul(x, y)
+
+
+def softmax(x: Node):
+    """Assumes `x` is of shape (B, L)"""
+    _, l = x.shape[0], x.shape[1]
+    ex = exp(x)
+    ex_sum = reduce_sum(ex, axis=1)
+    ex_sum_bcast = broadcast(ex_sum, axis=1, size=l)
+    probs = ex / ex_sum_bcast
+    return probs

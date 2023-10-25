@@ -36,7 +36,7 @@ def backward(sink: pg.Node):
         if node.is_unop:
             (in_node_grad,) = grads
             if isinstance(node.in_node, pg.Value):
-                grad_map[node.in_node] = in_node_grad
+                grad_map[node.in_node].append(in_node_grad)
                 backward_sinks.append(in_node_grad)
             worklist.append((node.in_node, in_node_grad))
 

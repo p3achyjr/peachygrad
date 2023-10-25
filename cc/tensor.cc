@@ -4,6 +4,7 @@ namespace peachygrad {
 namespace {
 
 struct TensorStringBuilder {
+  static constexpr int kNumEdges = 5;
   const Tensor& tensor;
   std::stringstream ss;
   Shape last_index;
@@ -25,7 +26,10 @@ struct TensorStringBuilder {
 
   void fn(const Shape& index, void* it) {
     int num_carry = 0;
+    int max_index = 0;
     for (int i = 0; i < index.num_dims; ++i) {
+      int dim = tensor.shape()[i];
+      if (std::min(index[i], dim - index[i]) > max_index) max_index = index[i];
       if (index[i] == 0 && last_index[i] != 0) ++num_carry;
     }
 
@@ -43,6 +47,12 @@ struct TensorStringBuilder {
         ss << "[";
       }
     }
+
+    // if (max_index == kNumEdges) {
+    //   ss << " ... ";
+    // } else if (max_index > kNumEdges) {
+    //   return;
+    // }
 
     if (tensor.dtype() == DType::kF32) {
       ss << *(float*)(it) << " ";

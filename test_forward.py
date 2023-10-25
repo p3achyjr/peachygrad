@@ -1,12 +1,22 @@
 import pytest
 import peachygrad_cc as pg_cc
 import peachygrad as pg
+import numpy as np
 
 
 #### Value Test ####
 def test_value():
     value_node = pg.tensor([1, 2, 3])
     assert value_node.eval().out_tensor == pg_cc.tensor([1, 2, 3])
+
+
+def test_value_np():
+    value_node = pg.tensor(
+        np.asarray([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=np.float32)
+    )
+    assert value_node.eval().out_tensor == pg_cc.tensor(
+        [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    )
 
 
 #### Data Op Tests ####
@@ -92,6 +102,49 @@ def test_matmul():
     assert res.out_tensor == pg_cc.tensor([[22, 28], [49, 64]])
 
 
+def test_exp():
+    x = pg.tensor([1, 2, 3])
+    y = pg.exp(x)
+    y.eval()
+    assert pg.testing.allclose(
+        y.out_tensor,
+        pg_cc.tensor([2.7183, 7.3891, 20.0855]),
+        rtol=1e-3,
+        atol=1e-3,
+    )
+
+    y.reset()
+    y.eval()
+    assert pg.testing.allclose(
+        y.out_tensor,
+        pg_cc.tensor([2.7183, 7.3891, 20.0855]),
+        rtol=1e-3,
+        atol=1e-3,
+    )
+
+    x.out_tensor = pg_cc.tensor([-1, -2, -3])
+    y.reset()
+    y.eval()
+    assert pg.testing.allclose(
+        y.out_tensor,
+        pg_cc.tensor([0.3679, 0.1353, 0.0498]),
+        rtol=1e-3,
+        atol=1e-3,
+    )
+
+
+def test_reduce_sum():
+    x = pg.tensor([[1, 2, 3], [4, 5, 6]])
+    y = pg.reduce_sum(x, axis=0)
+    y.eval()
+    assert y.out_tensor == pg_cc.tensor([[5, 7, 9]])
+
+    x.out_tensor = pg_cc.tensor([[1, 2, 3], [1, 2, 3]])
+    y.reset()
+    y.eval()
+    assert y.out_tensor == pg_cc.tensor([[2, 4, 6]])
+
+
 #### Vec Tests ####
 def test_neg():
     x = pg.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
@@ -162,6 +215,141 @@ def test_vec_div():
 
     assert res.out_tensor == pg_cc.tensor(
         [0.5, 0.4, 0.375, 0.8, 2.5, 2, 1.75, 4, 1.8, 4, 2.2]
+    )
+
+
+def test_vec_matmul():
+    x = pg.tensor(
+        [
+            [1, 2],
+            [3, 4],
+        ]
+    )
+    y = pg.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+
+    res = x @ y
+    assert res.shape == pg_cc.shape((2, 10))
+
+    res.eval()
+    assert res.out_tensor == pg_cc.tensor(
+        [[3, 6, 9, 12, 15, 18, 21, 24, 27, 30], [7, 14, 21, 28, 35, 42, 49, 56, 63, 70]]
+    )
+
+
+def test_vec_matmul_aligned():
+    x = pg.tensor(
+        [
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+        ]
+    )
+    y = pg.tensor(
+        [
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+        ]
+    )
+
+    res = x @ y
+    assert res.shape == pg_cc.shape((8, 8))
+
+    res.eval()
+    assert res.out_tensor == pg_cc.tensor(
+        [
+            [36, 72, 108, 144, 180, 216, 252, 288],
+            [36, 72, 108, 144, 180, 216, 252, 288],
+            [36, 72, 108, 144, 180, 216, 252, 288],
+            [36, 72, 108, 144, 180, 216, 252, 288],
+            [36, 72, 108, 144, 180, 216, 252, 288],
+            [36, 72, 108, 144, 180, 216, 252, 288],
+            [36, 72, 108, 144, 180, 216, 252, 288],
+            [36, 72, 108, 144, 180, 216, 252, 288],
+        ]
+    )
+
+
+def test_vec_softmax():
+    x = pg.tensor([[1, 2, 1, 1, 3, 4, 2, 2]])
+    ex = pg.exp(x)
+    ex_sum = pg.reduce_sum(ex, axis=1)
+    ex_sum_bcast = pg.broadcast(ex_sum, axis=1, size=8)
+    probs = ex / ex_sum_bcast
+
+    probs_op = pg.softmax(x)
+    probs.eval()
+    probs_op.eval()
+    assert pg.testing.allclose(
+        probs.out_tensor,
+        pg_cc.tensor(
+            [[0.0259, 0.0704, 0.0259, 0.0259, 0.1913, 0.5200, 0.0704, 0.0704]]
+        ),
+        atol=1e-3,
+        rtol=1e-3,
+    )
+    assert pg.testing.allclose(
+        probs_op.out_tensor,
+        pg_cc.tensor(
+            [[0.0259, 0.0704, 0.0259, 0.0259, 0.1913, 0.5200, 0.0704, 0.0704]]
+        ),
+        atol=1e-3,
+        rtol=1e-3,
+    )
+
+    # test reset logic
+    probs_op.reset()
+    probs.reset()
+    probs_op.eval()
+    probs.eval()
+    assert pg.testing.allclose(
+        probs.out_tensor,
+        pg_cc.tensor(
+            [[0.0259, 0.0704, 0.0259, 0.0259, 0.1913, 0.5200, 0.0704, 0.0704]]
+        ),
+        atol=1e-3,
+        rtol=1e-3,
+    )
+    assert pg.testing.allclose(
+        probs_op.out_tensor,
+        pg_cc.tensor(
+            [[0.0259, 0.0704, 0.0259, 0.0259, 0.1913, 0.5200, 0.0704, 0.0704]]
+        ),
+        atol=1e-3,
+        rtol=1e-3,
+    )
+
+    # test replacement.
+    x.out_tensor = pg_cc.tensor([[1, 0, 0, 1, 2, 0, 0, 3]])
+    probs_op.reset()
+    probs.reset()
+    probs_op.eval()
+    probs.eval()
+    assert pg.testing.allclose(
+        probs.out_tensor,
+        pg_cc.tensor(
+            [[0.0736, 0.0271, 0.0271, 0.0736, 0.2002, 0.0271, 0.0271, 0.5442]]
+        ),
+        atol=1e-3,
+        rtol=1e-3,
+    )
+    assert pg.testing.allclose(
+        probs_op.out_tensor,
+        pg_cc.tensor(
+            [[0.0736, 0.0271, 0.0271, 0.0736, 0.2002, 0.0271, 0.0271, 0.5442]]
+        ),
+        atol=1e-3,
+        rtol=1e-3,
     )
 
 

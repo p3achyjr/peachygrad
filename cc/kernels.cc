@@ -25,11 +25,28 @@ namespace {
 
 #define TILE_LEN 64
 
-// ---- Matmul Helpers ---- //
-// Multiply (n, d), (d, m) -> (n, m).
-void fmatmul_kernel(void* dst, void* m0, void* m1, const size_t dst_size,
-                    const Shape& dst_shape, const Shape& m0_shape,
-                    const Shape& m1_shape) {
+bool is_matmul_aligned(const Tensor& dst, const Tensor& m0, const Tensor& m1) {
+  static constexpr size_t kAlign = sizeof(__m256) / sizeof(float);
+  auto divides = [](size_t d) { return d % kAlign == 0; };
+
+  for (int i = 0; i < dst.shape().num_dims; ++i) {
+    if (!divides(dst.shape()[i])) return false;
+  }
+
+  for (int i = 0; i < m0.shape().num_dims; ++i) {
+    if (!divides(m0.shape()[i])) return false;
+  }
+
+  for (int i = 0; i < m1.shape().num_dims; ++i) {
+    if (!divides(m1.shape()[i])) return false;
+  }
+
+  return true;
+}
+
+void fmatmul_kernel_unaligned(void* dst, void* m0, void* m1,
+                              const size_t dst_size, const Shape& dst_shape,
+                              const Shape& m0_shape, const Shape& m1_shape) {
   float* fdst = static_cast<float*>(dst);
   float* fm0 = static_cast<float*>(m0);
   float* fm1 = static_cast<float*>(m1);
@@ -38,10 +55,59 @@ void fmatmul_kernel(void* dst, void* m0, void* m1, const size_t dst_size,
   int d = m0_shape[1];
   int m = m1_shape[1];
 
+  // For each row in `dst`, iterate through the row `d` times, each time loading
+  // and element of `m0`, then adding, to each element in the row, the `m0`
+  // element multiplied with an element in `m1` in the same column as `dst`.
+  // This iteration pattern ensures we always traverse the matrices row-wise,
+  // maximizing spatial locality.
   for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < m; ++j) {
-      for (int k = 0; k < d; ++k) {
-        fdst[i * m + j] += fm0[i * d + k] * fm1[k * m + j];
+    for (int k = 0; k < d; ++k) {
+      const int m0_off = i * d;
+      const int m1_off = k * m;
+      const int dst_off = i * m;
+      float m0_elem = fm0[m0_off + k];
+
+      for (int j = 0; j < m; ++j) {
+        fdst[dst_off + j] += m0_elem * fm1[m1_off + j];
+      }
+    }
+  }
+}
+
+// ---- Matmul Helpers ---- //
+// Multiply (n, d), (d, m) -> (n, m).
+void fmatmul_kernel_aligned(void* dst, void* m0, void* m1,
+                            const size_t dst_size, const Shape& dst_shape,
+                            const Shape& m0_shape, const Shape& m1_shape) {
+  float* fdst = static_cast<float*>(dst);
+  float* fm0 = static_cast<float*>(m0);
+  float* fm1 = static_cast<float*>(m1);
+
+  int n = m0_shape[0];
+  int d = m0_shape[1];
+  int m = m1_shape[1];
+
+  // See `fmatmul_kernel_unaligned` for iteration pattern.
+  for (int i = 0; i < n; ++i) {
+    for (int k = 0; k < d; ++k) {
+      const int m0_off = i * d;
+      const int m1_off = k * m;
+      const int dst_off = i * m;
+      float m0_elem = fm0[m0_off + k];
+      __m256 m0_vec = _mm256_set1_ps(m0_elem);
+
+      size_t mm_size = sizeof(__m256) / sizeof(int);
+      size_t vec_ub = (m / mm_size) * mm_size;
+      for (int j = 0; j < vec_ub; j += mm_size) {
+        float* dst_j = &fdst[dst_off + j];
+        __m256 m1_vec = _mm256_load_ps(&fm1[m1_off + j]);
+        __m256 dst_vec = _mm256_load_ps(dst_j);
+        __m256 res = _mm256_fmadd_ps(m0_vec, m1_vec, dst_vec);
+        _mm256_store_ps(dst_j, res);
+      }
+
+      for (int j = vec_ub; j < m; ++j) {
+        fdst[dst_off + j] += m0_elem * fm1[m1_off + j];
       }
     }
   }
@@ -301,6 +367,123 @@ void ilog(void* dst, void* x, size_t n) {
   }
 }
 
+// ---- Rcp ---- //
+void frcp(void* dst, void* x, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  float* fx = static_cast<float*>(x);
+
+  __m256 ones = _mm256_set1_ps(1.0f);
+  size_t mm_size = sizeof(__m256) / sizeof(float);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < vec_ub; i += mm_size) {
+    _mm256_store_ps(fdst + i, _mm256_div_ps(ones, _mm256_load_ps(fx + i)));
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = 1.0f / fx[i];
+  }
+}
+
+void ircp(void* dst, void* x, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  int* ix = static_cast<int*>(x);
+
+  __m256 ones = _mm256_set1_ps(1.0f);
+  size_t mm_size = sizeof(__m256) / sizeof(float);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < vec_ub; i += mm_size) {
+    _mm256_store_ps(
+        fdst + i,
+        _mm256_div_ps(
+            ones, _mm256_cvtepi32_ps(_mm256_load_si256((__m256i*)(ix + i)))));
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = 1.0f / ix[i];
+  }
+}
+
+// ---- Max ---- //
+void fmax(void* dst, void* x, float c, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  float* fx = static_cast<float*>(x);
+
+  __m256 c_vec = _mm256_set1_ps(c);
+  size_t mm_size = sizeof(__m256) / sizeof(float);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < vec_ub; i += mm_size) {
+    _mm256_store_ps(fdst + i, _mm256_max_ps(_mm256_load_ps(fx + i), c_vec));
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = std::max(fx[i], c);
+  }
+}
+
+void imax(void* dst, void* x, float c, size_t n) {
+  int* idst = static_cast<int*>(dst);
+  int* ix = static_cast<int*>(x);
+
+  __m256i c_vec = _mm256_set1_epi32((int)c);
+  size_t mm_size = sizeof(__m256) / sizeof(float);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < vec_ub; i += mm_size) {
+    _mm256_store_si256(
+        (__m256i*)(idst + i),
+        _mm256_max_epi32(_mm256_load_si256((__m256i*)(ix + i)), c_vec));
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    idst[i] = std::max(ix[i], (int)c);
+  }
+}
+
+void fmask_gt(void* dst, void* x, float c, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  float* fx = static_cast<float*>(x);
+
+  const __m256 ones = _mm256_set1_ps(1.0f);
+  const __m256 c_vec = _mm256_set1_ps(c);
+  size_t mm_size = sizeof(__m256) / sizeof(float);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < vec_ub; i += mm_size) {
+    __m256 x_vec = _mm256_load_ps(fx + i);
+    __m256 mask = _mm256_cmp_ps(x_vec, c_vec, _CMP_GT_OQ);
+    __m256 masked_ones = _mm256_and_ps(ones, mask);
+    _mm256_store_ps(fdst + i, masked_ones);
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = fx[i] > c ? 1.0f : 0.0f;
+  }
+}
+
+void imask_gt(void* dst, void* x, float c, size_t n) {
+  float* fdst = static_cast<float*>(dst);
+  int* ix = static_cast<int*>(x);
+
+  const __m256 ones = _mm256_set1_ps(1.0f);
+  const __m256i c_vec = _mm256_set1_epi32((int)c);
+  size_t mm_size = sizeof(__m256) / sizeof(int);
+  size_t vec_ub = (n / mm_size) * mm_size;
+  for (size_t i = 0; i < vec_ub; i += mm_size) {
+    __m256i x_vec = _mm256_load_si256((__m256i*)(ix + i));
+    __m256i mask = _mm256_cmpgt_epi32(x_vec, c_vec);
+    __m256 masked_ones = _mm256_and_ps(ones, _mm256_castsi256_ps(mask));
+    _mm256_store_ps(fdst + i, masked_ones);
+  }
+
+  // finish stragglers.
+  for (size_t i = vec_ub; i < n; ++i) {
+    fdst[i] = ix[i] > (int)c ? 1.0f : 0.0f;
+  }
+}
+
 // ---- Add ---- //
 void fadd(void* dst, void* x, void* y, size_t n) {
   float* fdst = static_cast<float*>(dst);
@@ -425,20 +608,22 @@ void idiv(void* dst, void* x, void* y, size_t n) {
 // TODO: https://arxiv.org/pdf/2006.06762.pdf
 void fmatmul(Tensor& dst, Tensor& x, Tensor& y) {
   // At this point, we can assume shapes are valid.
+  Shape x_shape(x.shape());
+  Shape y_shape(y.shape());
   if (x.is_vec()) {
     // y is a matrix.
-    Shape x_shape({1, x.shape()[0]});
-    fmatmul_kernel(dst.raw(), x.raw(), y.raw(), dst.nelems(), dst.shape(),
-                   x_shape, y.shape());
+    x_shape = Shape({1, x.shape()[0]});
   } else if (y.is_vec()) {
     // x is a matrix.
-    Shape y_shape({y.shape()[0], 1});
-    fmatmul_kernel(dst.raw(), x.raw(), y.raw(), dst.nelems(), dst.shape(),
-                   x.shape(), y_shape);
+    y_shape = Shape({y.shape()[0], 1});
+  }
+
+  if (is_matmul_aligned(dst, x, y)) {
+    fmatmul_kernel_aligned(dst.raw(), x.raw(), y.raw(), dst.nelems(),
+                           dst.shape(), x.shape(), y.shape());
   } else {
-    // both are matrices.
-    fmatmul_kernel(dst.raw(), x.raw(), y.raw(), dst.nelems(), dst.shape(),
-                   x.shape(), y.shape());
+    fmatmul_kernel_unaligned(dst.raw(), x.raw(), y.raw(), dst.nelems(),
+                             dst.shape(), x.shape(), y.shape());
   }
 }
 
@@ -458,6 +643,79 @@ void imatmul(Tensor& dst, Tensor& x, Tensor& y) {
     imatmul_kernel(dst.raw(), x.raw(), y.raw(), dst.nelems(), dst.shape(),
                    x.shape(), y.shape());
   }
+}
+
+// ---- Reduce Sum ---- //
+void freduce_sum(Tensor& dst, Tensor& x, int axis) {
+  auto sum_dst = [&dst, axis](const Shape& index, void* it) {
+    Shape dst_index = index;
+    dst_index[axis] = 0;
+    *((float*)(dst.raw()) + LinOffset(dst_index, dst.shape())) +=
+        *((float*)(it));
+  };
+  GenericIterate(
+      x, []() {}, sum_dst, []() {});
+}
+
+void ireduce_sum(Tensor& dst, Tensor& x, int axis) {
+  auto sum_dst = [&dst, axis](const Shape& index, void* it) {
+    Shape dst_index = index;
+    dst_index[axis] = 0;
+    *((int*)(dst.raw()) + LinOffset(dst_index, dst.shape())) += *((int*)(it));
+  };
+  GenericIterate(
+      x, []() {}, sum_dst, []() {});
+}
+
+// ---- Reduce Mean ---- //
+void freduce_mean(Tensor& dst, Tensor& x, int axis) {
+  float ratio = 1.0f / x.shape()[axis];
+  auto mean_dst = [&dst, axis, ratio](const Shape& index, void* it) {
+    Shape dst_index = index;
+    dst_index[axis] = 0;
+    float x = *((float*)(it));
+    *((float*)(dst.raw()) + LinOffset(dst_index, dst.shape())) += x * ratio;
+  };
+  GenericIterate(
+      x, []() {}, mean_dst, []() {});
+}
+
+void ireduce_mean(Tensor& dst, Tensor& x, int axis) {
+  float ratio = 1.0f / x.shape()[axis];
+  auto mean_dst = [&dst, axis, ratio](const Shape& index, void* it) {
+    Shape dst_index = index;
+    dst_index[axis] = 0;
+    float x = static_cast<float>(*((int*)(it)));
+    *((float*)(dst.raw()) + LinOffset(dst_index, dst.shape())) += x * ratio;
+  };
+  GenericIterate(
+      x, []() {}, mean_dst, []() {});
+}
+
+// ---- Broadcast ---- //
+void fbroadcast(Tensor& dst, Tensor& x, int axis, size_t dup) {
+  auto dup_dst = [&dst, axis, dup](const Shape& index, void* it) {
+    Shape dst_index = index;
+    for (int i = 0; i < dup; ++i) {
+      dst_index[axis] = i;
+      *((float*)(dst.raw()) + LinOffset(dst_index, dst.shape())) =
+          *((float*)(it));
+    }
+  };
+  GenericIterate(
+      x, []() {}, dup_dst, []() {});
+}
+
+void ibroadcast(Tensor& dst, Tensor& x, int axis, size_t dup) {
+  auto dup_dst = [&dst, axis, dup](const Shape& index, void* it) {
+    Shape dst_index = index;
+    for (int i = 0; i < dup; ++i) {
+      dst_index[axis] = i;
+      *((int*)(dst.raw()) + LinOffset(dst_index, dst.shape())) = *((int*)(it));
+    }
+  };
+  GenericIterate(
+      x, []() {}, dup_dst, []() {});
 }
 
 }  // namespace peachygrad

@@ -102,6 +102,8 @@ class TensorBuf final {
 
   inline void* raw() const { return buf_; }
   inline size_t nelems() const { return nelems_; }
+  inline size_t nbytes() const { return nbytes_; }
+  inline void set_zero() { memset(buf_, 0, nbytes_); }
 
  private:
   const DType dtype_;
@@ -120,6 +122,7 @@ class Tensor final {
   Tensor(DType dtype, std::initializer_list<size_t> dims);
   Tensor(DType dtype, const Shape& shape);
 
+  inline void set_zero() { buf().set_zero(); }
   inline TensorBuf& buf() { return *tensor_buf_; }
   inline size_t nelems() const { return tensor_buf_->nelems(); }
   inline void* raw() const { return tensor_buf_->raw(); }
@@ -128,6 +131,13 @@ class Tensor final {
   inline bool is_vec() const { return shape_.num_dims == 1; }
   inline bool is_matrix() const { return shape_.num_dims == 2; }
   inline bool has_at_least_ndims(size_t n) { return shape_.num_dims <= n; }
+
+  inline Tensor copy() {
+    Tensor copy(dtype_, shape_);
+    memcpy(copy.raw(), raw(), buf().nbytes());
+
+    return copy;
+  }
 
   bool operator==(const Tensor& other);
 

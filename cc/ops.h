@@ -16,6 +16,7 @@ enum class UnopCode : uint8_t {
   kNeg = 0,
   kExp = 1,
   kLog = 2,
+  kRcp = 3,
 };
 
 Tensor elemwise_neg(Tensor& x);
@@ -26,6 +27,9 @@ Tensor elemwise_exp(Tensor& dst, Tensor& x);
 
 Tensor elemwise_log(Tensor& x);
 Tensor elemwise_log(Tensor& dst, Tensor& x);
+
+Tensor elemwise_rcp(Tensor& x);
+Tensor elemwise_rcp(Tensor& dst, Tensor& x);
 
 Tensor elemwise_add(Tensor& x, Tensor& y);
 Tensor elemwise_add(Tensor& dst, Tensor& x, Tensor& y);
